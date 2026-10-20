@@ -17,7 +17,7 @@ header{position:sticky;top:0;z-index:20;background:rgba(0,0,0,.75);backdrop-filt
 .logo{width:40px;height:40px;border-radius:12px;background:#EE4D2D;display:grid;place-items:center;font:22px Anton;box-shadow:0 0 24px #ff1a1a66}
 header h1{font:22px/1 Anton;letter-spacing:.04em}header h1 span{color:#ff1a1a}
 header p{font-size:11px;color:#fff9;letter-spacing:.12em;text-transform:uppercase;margin-top:4px}
-.wrap{max-width:1600px;margin:0 auto;padding:16px;display:grid;gap:16px;grid-template-columns:1fr}
+.wrap{max-width:1600px;margin:0 auto;padding:16px;display:grid;gap:16px;grid-template-columns:minmax(0,1fr)}
 @media(min-width:1100px){.wrap{grid-template-columns:320px minmax(0,1fr) 380px}}
 .col{display:flex;flex-direction:column;gap:16px;min-width:0}
 .card{background:#ffffff0d;border:1px solid #ffffff1a;border-radius:20px;padding:16px}
@@ -79,6 +79,49 @@ footer{text-align:center;font-size:10px;color:#fff3;letter-spacing:.12em;text-tr
   details.fold:not([open])>summary::after{transform:rotate(-90deg)}
   details.fold>.fold-body{padding:0 12px 12px}
 
+  /* === MOBILE FRIENDLY FIX === */
+  html{-webkit-text-size-adjust:100%;overflow-x:hidden;max-width:100%}
+  body{max-width:100vw}
+  img,canvas,video,textarea,select,input{max-width:100%}
+  input[type=number]{width:100%;min-width:0;background:#101015;border:1px solid #ffffff1a;border-radius:10px;padding:9px 10px;outline:0;font-size:13px;color:#fff;margin-top:4px}
+  input[type=number].bad{border-color:#ff3b30}
+  .box select{width:100%;min-width:0}
+  #mus{min-width:0}
+  .box small{overflow-wrap:anywhere}
+  .cap,.desc,.sum,.note,.status{overflow-wrap:anywhere}
+  textarea{max-width:100%}
+  .card h2{flex-wrap:wrap;gap:6px}
+  .grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:6px}
+  #toast{bottom:calc(20px + env(safe-area-inset-bottom,0px))}
+  @media(max-width:700px){
+    header{padding:10px 12px;padding-top:calc(10px + env(safe-area-inset-top,0px));gap:10px}
+    .logo{width:34px;height:34px;font-size:18px;border-radius:10px}
+    header h1{font-size:16px;line-height:1.15}
+    header p{font-size:9px;letter-spacing:.06em;margin-top:3px}
+    .wrap{padding:10px;gap:12px}
+    .col{gap:12px}
+    .card{padding:12px;border-radius:16px}
+    .card h2{font-size:18px}
+    .btn{height:44px;font-size:13px}
+    .row>.btn{flex:1 1 calc(50% - 8px);min-width:0;white-space:normal;line-height:1.15;padding:0 10px}
+    .dur .btn{height:42px;white-space:normal;line-height:1.15}
+    .btn.r{font-size:16px}
+    input[type=text],select,textarea,input[type=number]{font-size:16px}
+    textarea{font-size:12px}
+    textarea#plPreview,textarea#tm{font-size:11px}
+    .hero{height:170px}
+    .pad h3{font-size:20px}
+    .pv{max-width:260px;border-radius:18px}
+    .tpls{grid-template-columns:repeat(3,minmax(0,1fr))}
+    .tpl{font-size:8px;padding:0 2px;text-align:center}
+    .done-item .btn{flex:1 1 auto;height:38px}
+    #list{max-height:340px}
+    .tip{overflow-wrap:anywhere}
+  }
+  @media(max-width:380px){
+    .row>.btn{flex:1 1 100%}
+    .grid2{grid-template-columns:minmax(0,1fr)}
+  }
 </style>
 </head>
 <body>
@@ -169,8 +212,8 @@ footer{text-align:center;font-size:10px;color:#fff3;letter-spacing:.12em;text-tr
         <div style="display:flex;gap:8px;margin-top:6px"><label style="font-size:11px"><input type="checkbox" id="plShopeeFirst" checked> Link di atas caption</label><label style="font-size:11px"><input type="checkbox" id="plShopeeAd" checked> Tambah #ad hashtag</label></div>
       </div>
       <div class="box"><small>⚙️ Kecepatan (jangan terlalu cepat!)</small>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:6px">
-          <div><small>Delay antar post (detik)</small><input type="number" id="plDelay" value="2000" style="border-radius:8px"></div>
+        <div class="grid2">
+          <div><small>Delay antar post (detik)</small><input type="number" id="plDelay" value="90" style="border-radius:8px"></div>
           <div><small>Speed Factor</small><input type="number" id="plFactor" value="1" step="0.1" style="border-radius:8px"></div>
           <div><small>Jeda klik Next (ms)</small><input type="number" id="plNext" value="2000" style="border-radius:8px"></div>
           <div><small>Maks tunggu upload (detik)</small><input type="number" id="plUpWait" value="300" style="border-radius:8px"></div>
@@ -1210,7 +1253,7 @@ if(!autoRestore()){if(SAMPLE.length)setItems(SAMPLE,SAMPLE_NAME+" (contoh)");els
     const mount = () => { if(!badge.isConnected && document.body) document.body.appendChild(badge); };
     mount(); document.addEventListener('DOMContentLoaded', mount); setInterval(mount, 3000);
     const openDB = () => new Promise((res, rej) => {
-      const rq = indexedDB.open('vidgen_v3', 1);
+      const rq = indexedDB.open('shopee_vidgen_v1', 1);
       rq.onupgradeneeded = () => { ['meta', 'results', 'resmeta'].forEach(n => { if(!rq.result.objectStoreNames.contains(n)) rq.result.createObjectStore(n); }); };
       rq.onsuccess = () => res(rq.result); rq.onerror = () => rej(rq.error);
     });
@@ -1975,7 +2018,7 @@ if(mbBtn){
   videoInp = findVideoInput(findComposerDialog() || dlg) || videoInp;
 }
 
-const file = new File([blob], 'video' + videoId + '.mp4', { type: 'video/mp4' });
+const _vt = (blob.type || 'video/mp4').split(';')[0]; const file = new File([blob], 'video' + videoId + (_vt.indexOf('webm') >= 0 ? '.webm' : '.mp4'), { type: _vt });
 const mb1 = Math.round(file.size/1024/1024*10)/10;
 let started = false, usedMode = '';
 
@@ -2627,10 +2670,9 @@ if(genAllBtn){
 refreshDone().then(renderDoneList);
 
 // ==================== TAMPERMONKEY GEN ALL (PORT FROM AMAZON - SHOPEE VERSION) ====================
-const $ = (id)=>document.getElementById(id);
 function checkSpeeds(){
   const SPEEDS=[
-    {id:'plDelay', key:'DELAY', def:2000, hardMin:300, hardMax:30000, warnLow:1200, warnHigh:10000, name:'Jeda antar post'},
+    {id:'plDelay', key:'DELAY', def:90, hardMin:10, hardMax:3600, warnLow:45, warnHigh:900, name:'Jeda antar post (detik)'},
     {id:'plFactor', key:'SPEED', def:1, hardMin:0.25, hardMax:5, warnLow:0.6, warnHigh:2.5, name:'Kecepatan aksi'},
     {id:'plNext', key:'NEXTCD', def:2000, hardMin:300, hardMax:30000, warnLow:1200, warnHigh:10000, name:'Jeda klik Next'},
     {id:'plUpWait', key:'UPWAIT', def:300, hardMin:30, hardMax:3600, warnLow:120, warnHigh:900, name:'Maks tunggu upload'},
@@ -2662,7 +2704,7 @@ function buildPlayerShopee(titles, captions){
   const tplEl=document.getElementById('playerTpl');
   if(!tplEl) throw new Error('Template player tidak ditemukan');
   const sv={
-    DELAY: String(Math.round(parseFloat(document.getElementById('plDelay').value)||2000)),
+    DELAY: String(Math.round(parseFloat(document.getElementById('plDelay').value)||90)),
     SPEED: String(parseFloat(document.getElementById('plFactor').value)||1),
     NEXTCD: String(Math.round(parseFloat(document.getElementById('plNext').value)||2000)),
     UPWAIT: String(Math.round(parseFloat(document.getElementById('plUpWait').value)||300)),
@@ -2715,7 +2757,7 @@ if(plGenBtn){
       if(it.watchLink) shopeeLink=it.watchLink;
       else if(shopeeLines.length) shopeeLink=shopeeLines[i % shopeeLines.length];
       if(shopeeLink){
-        const adTag=shopeeAd?'\n#ad #ShopeeHaul #ShopeeMurah':''; 
+        const adTag=shopeeAd?'\n#ad':''; 
         if(shopeeFirst) cap=shopeeLink+'\n\n'+cap+adTag;
         else cap=cap+'\n\n🛒 BELI DI SHOPEE: '+shopeeLink+adTag;
       }
@@ -2735,8 +2777,8 @@ if(plGenBtn){
 const plCopyBtn=document.getElementById('plCopy');
 if(plCopyBtn){
   plCopyBtn.addEventListener('click', async ()=>{
-    if(!playerCode) return;
     const st=document.getElementById('plStat');
+    if(!playerCode){ st.textContent='⚠️ Klik GENERATE SCRIPT dulu, baru Copy'; return; }
     const done=()=>{ st.textContent='📋 Tercopy! Paste di Tampermonkey → Save'; setTimeout(()=>{ if(st) st.textContent=`✅ ${S.items.length} video siap`; },2500); };
     try{ await navigator.clipboard.writeText(playerCode); done(); }
     catch(e){
