@@ -204,10 +204,14 @@ footer{text-align:center;font-size:10px;color:#fff3;letter-spacing:.12em;text-tr
       <div class="box"><small>Judul Source</small>
         <select id="plTitleSrc" style="width:100%;margin-top:4px"><option value="prod">Nama Produk (headline)</option><option value="col">Kolom video_title kalau ada</option></select>
       </div>
-      <div class="box"><small>Caption Template (pakai | untuk baris baru)</small>
-        <textarea id="plCap" style="height:100px;margin-top:4px">🔥 DISKON 70% OFF! | Cek link di komen pertama! 👇 | #ShopeeHaul #ShopeeMurah #RacunShopee</textarea>
+      <div class="box"><small>Caption &amp; Komentar</small>
+        <label style="display:flex;gap:8px;align-items:flex-start;font-size:12px;margin-top:6px"><input type="checkbox" id="plCapAuto" checked style="margin-top:3px"><span>Caption otomatis dari Excel (sama dengan Caption Preview, tanpa link)</span></label>
+        <label style="display:flex;gap:8px;align-items:flex-start;font-size:12px;margin-top:8px"><input type="checkbox" id="plComAuto" checked style="margin-top:3px"><span>Auto komentar pertama (link affiliasi) langsung setelah reel diposting</span></label>
       </div>
-      <div class="box"><small>Link Shopee (satu per baris, urut sesuai video)</small>
+      <div class="box"><small>Caption Template manual (hanya dipakai kalau "Caption otomatis" dimatikan; pakai | untuk baris baru)</small>
+        <textarea id="plCap" placeholder="Kosongkan kalau pakai caption otomatis" style="height:100px;margin-top:4px">🔥 DISKON 70% OFF! | Cek link di komen pertama! 👇 | #ShopeeHaul #ShopeeMurah #RacunShopee</textarea>
+      </div>
+      <div class="box"><small>Link Shopee cadangan (satu per baris, urut sesuai video; dipakai kalau kolom watch_link Excel kosong)</small>
         <textarea id="plShopee" placeholder="https://s.shopee.co.id/xxxxx&#10;https://s.shopee.co.id/yyyyy" style="height:70px;margin-top:4px"></textarea>
         <div style="display:flex;gap:8px;margin-top:6px"><label style="font-size:11px"><input type="checkbox" id="plShopeeFirst" checked> Link di atas caption</label><label style="font-size:11px"><input type="checkbox" id="plShopeeAd" checked> Tambah #ad hashtag</label></div>
       </div>
@@ -426,8 +430,8 @@ function bodyText(a){
   if(S.maxc&&t.length>S.maxc){t=t.slice(0,S.maxc);const k=Math.max(t.lastIndexOf("\n\n"),t.lastIndexOf(". ")+1);if(k>S.maxc*.5)t=t.slice(0,k)}
   return t.trim()
 }
-function caption(){
-  const a=cur();if(!a)return"";
+function caption(a){
+  a=a||cur();if(!a)return"";
   const hk=hookLine(a),p=getPrice(a),o=getOrig(a),pc=getPct(a),sd=soldInfo(a),L=[];
   if(o&&p&&o>p){L.push("💰 Harga Asli: "+idr(o));L.push("🔥 Harga Promo: "+idr(p)+(pc?" (-"+pc+"%)":""))}
   else if(p)L.push("🔥 Harga: "+idr(p)+(pc?" (-"+pc+"%)":""));
@@ -1228,6 +1232,7 @@ if(!autoRestore()){if(SAMPLE.length)setItems(SAMPLE,SAMPLE_NAME+" (contoh)");els
 // @grant        GM_deleteValue
 // @grant        GM_addValueChangeListener
 // @grant        GM_removeValueChangeListener
+// @grant        GM_setClipboard
 // @noframes
 // @run-at       document-idle
 // ==/UserScript==
@@ -1319,6 +1324,10 @@ if(!autoRestore()){if(SAMPLE.length)setItems(SAMPLE,SAMPLE_NAME+" (contoh)");els
     // Post sebelum nomor ini otomatis ditandai "dilewati" (anti dobel). Berlaku sekali per nilai startFrom.
     startFrom: 1,
 
+    titleFirst: @@TITLE_FIRST@@,     // true = judul produk jadi baris pertama caption (mode template manual). false = caption otomatis Excel dipakai apa adanya
+    commentAfterPost: @@COMMENT_ON@@, // true = setelah post sukses, otomatis tulis komentar pertama (link affiliasi) di post itu
+    commentWaitMs: 90000,    // maks tunggu post baru muncul di feed sebelum komentar
+
     delayBetween: @@DELAY@@,         // jeda antar post (detik), + random kecil
     maxWaitUpload: @@UPWAIT@@,       // detik maksimum nunggu upload video kelar di FB
     downloadTimeoutMs: @@DLTO@@,
@@ -1338,6 +1347,7 @@ if(!autoRestore()){if(SAMPLE.length)setItems(SAMPLE,SAMPLE_NAME+" (contoh)");els
   // Urutan TITLES / POSTS = urutan slot di IndexedDB.
   const TITLES = @@TITLES@@;
   const POSTS = @@POSTS@@;
+  const COMMENTS = @@COMMENTS@@;   // komentar pertama per video (link affiliasi), urut sama dengan POSTS
 
   // Steps acuan (sesuai yang diberikan): CLICK compose -> TYPE caption -> CLICK post.
   // Upload video disisipkan terpisah di antara TYPE dan POST (lihat playOnePost).
@@ -1357,7 +1367,7 @@ if(!autoRestore()){if(SAMPLE.length)setItems(SAMPLE,SAMPLE_NAME+" (contoh)");els
   function captionFor(i){
     let c = String(POSTS[i] || '');
     if(CONFIG.replaceAllLinks && CONFIG.watchLink) c = c.replace(/https?:\/\/[^\s]+/gi, CONFIG.watchLink);
-    const ttl = titleFor(i);
+    const ttl = CONFIG.titleFirst ? titleFor(i) : '';
     if(ttl && c && !c.startsWith(ttl + '\n')) c = ttl + '\n' + c;   // judul per video = baris pertama caption
     else if(ttl && !c) c = ttl;
     return c;
@@ -2169,10 +2179,76 @@ addLog('✅ FB menerima file, upload dimulai (mode=' + usedMode + ')');
       // bersihkan dialog "Create post" kosong lain yg nyasar/auto-muncul, kalau ada (tidak mempengaruhi hasil)
       const stray = findComposerDialog();
       if(stray && stray !== dlgRef && !findPostButton(stray)){ addLog('🧹 Nutup dialog composer kosong yang nyasar...'); await closeComposer(); }
+      try{ await postFirstComment(idx, caption); }catch(e){ addLog('💬 Komentar error: ' + e.message); }
       return 'ok';
     }
     addLog('⚠️ Dialog tidak tertutup. Status TIDAK TERKONFIRMASI — cek manual di grup.');
     return 'unsure';
+  }
+
+
+  // ============ KOMENTAR PERTAMA (otomatis setelah post sukses) ============
+  function commentFor(i){ return String(COMMENTS[i] || '').trim(); }
+  function topArticles(){
+    return Array.from(document.querySelectorAll('[role="article"]')).filter(a => !(a.parentElement && a.parentElement.closest('[role="article"]')) && isVis(a));
+  }
+  function findPostArticle(caption){
+    const key = normTxt(String(caption).split('\n').map(x => x.trim()).filter(Boolean)[0] || '').slice(0, 28).toLowerCase();
+    if(!key) return null;
+    return topArticles().find(a => normTxt(a.innerText).toLowerCase().indexOf(key) >= 0) || null;
+  }
+  function commentBoxIn(art){
+    const c = Array.from(art.querySelectorAll('[contenteditable="true"][role="textbox"], [contenteditable="true"]')).filter(isVis);
+    return c.find(e => /comment|komentar|balas|reply/i.test((e.getAttribute('aria-label') || '') + ' ' + (e.getAttribute('aria-placeholder') || ''))) || null;
+  }
+  function openCommentBox(art){
+    const b = Array.from(art.querySelectorAll('[role="button"], a, div[tabindex]')).filter(isVis)
+      .find(e => /^(comment|komentari|komentar|leave a comment|write a comment|tulis komentar)\b/i.test(normTxt(e.getAttribute('aria-label') || e.innerText || '')));
+    return b || null;
+  }
+  function pressEnterSubmit(el){
+    const o = { key:'Enter', code:'Enter', keyCode:13, which:13, bubbles:true, cancelable:true, composed:true };
+    try{ el.dispatchEvent(new KeyboardEvent('keydown', o)); el.dispatchEvent(new KeyboardEvent('keypress', o)); el.dispatchEvent(new KeyboardEvent('keyup', o)); }catch(e){}
+  }
+  async function postFirstComment(idx, caption){
+    const text = commentFor(idx);
+    if(!CONFIG.commentAfterPost || !text) return 'skip';
+    addLog('💬 Komentar pertama: cari post baru di feed...');
+    const firstLine = normTxt(text.split('\n').filter(x => x.trim())[0] || '').slice(0, 24).toLowerCase();
+    const t0 = Date.now();
+    let art = null;
+    while(RUN && Date.now() - t0 < CONFIG.commentWaitMs){
+      art = findPostArticle(caption);
+      if(art){ try{ art.scrollIntoView({ block:'center' }); }catch(e){} await sleep(800); break; }
+      await sleep(2000);
+    }
+    if(!art){ addLog('⚠️ Post baru belum muncul di feed, komentar dilewati.'); return 'fail'; }
+    let box = commentBoxIn(art);
+    if(!box){
+      const ob = openCommentBox(art);
+      if(ob){ await universalClick(ob, {}); await sleep(1200); box = commentBoxIn(findPostArticle(caption) || art); }
+    }
+    if(!box){ addLog('⚠️ Kolom komentar tidak ketemu.'); return 'fail'; }
+    box.focus(); await sleep(400);
+    let filled = false;
+    for(const mode of ['paste', 'para']){
+      await clearEditor(box);
+      if(mode === 'paste'){ if(!pasteInto(box, text)) continue; await sleep(800); }
+      else { await typeParas(box, text.split('\n')); await sleep(600); }
+      if(normTxt(box.innerText).toLowerCase().indexOf(firstLine) >= 0){ filled = true; addLog('✅ Komentar terisi [' + mode + ']'); break; }
+    }
+    if(!filled){ addLog('⚠️ Komentar gagal terisi.'); return 'fail'; }
+    pressEnterSubmit(box);
+    let sent = await waitFor(() => !normTxt(box.innerText) || !document.contains(box), 8000, 500);
+    if(!sent){
+      const sb = Array.from((box.closest('form') || art).querySelectorAll('[role="button"]')).filter(isVis)
+        .find(e => /^(comment|komentar|post|kirim|send)$/i.test(normTxt(e.getAttribute('aria-label') || '')));
+      if(sb){ addLog('Enter tidak mengirim, klik tombol kirim...'); await universalClick(sb, {}); sent = await waitFor(() => !normTxt(box.innerText) || !document.contains(box), 8000, 500); }
+    }
+    if(sent){ addLog('✅ Komentar pertama terkirim.'); return 'ok'; }
+    addLog('⚠️ Komentar belum terkirim otomatis. Teks komentar disalin ke clipboard, tempel manual.');
+    try{ GM_setClipboard(text); }catch(e){}
+    return 'fail';
   }
 
   // ============ UI ============
@@ -2700,7 +2776,8 @@ function buildTitlesShopee(src){
     return (it.title||'Produk #'+(i+1)).trim();
   });
 }
-function buildPlayerShopee(titles, captions){
+function buildPlayerShopee(titles, captions, comments, opt){
+  opt=opt||{}; comments=comments||[];
   const tplEl=document.getElementById('playerTpl');
   if(!tplEl) throw new Error('Template player tidak ditemukan');
   const sv={
@@ -2715,7 +2792,7 @@ function buildPlayerShopee(titles, captions){
   const js=v=>JSON.stringify(v,null,2).replace(/</g,'\\u003c');
   const firstUrl=((captions.find(c=>/https?:\/\//i.test(c))||'').match(/https?:\/\/[^\s]+/i)||[''])[0];
   const map={
-    NAME: 'SHOPEE FB VIDEO + STEPS v1.0 ('+titles.length+' video)',
+    NAME: 'SHOPEE FB VIDEO + STEPS v1.1 ('+titles.length+' video)',
     VERSION: '1.0.'+Date.now(),
     GEN_MATCH: genMatch,
     WATCH_LINK: JSON.stringify(firstUrl),
@@ -2726,7 +2803,10 @@ function buildPlayerShopee(titles, captions){
     UPWAIT: sv.UPWAIT,
     DLTO: sv.DLTO,
     TITLES: js(titles),
-    POSTS: js(captions)
+    POSTS: js(captions),
+    COMMENTS: js(comments),
+    COMMENT_ON: opt.comAuto?'true':'false',
+    TITLE_FIRST: opt.capAuto?'false':'true'
   };
   let code=tplEl.textContent.replace(/^\s*\n/,'').replace(/@@([A-Z_]+)@@/g,(m,k)=>(k in map)?map[k]:m);
   // inject startFrom
@@ -2751,22 +2831,31 @@ if(plGenBtn){
     const shopeeLines=shopeeRaw.split(/[\s,]+/).filter(Boolean);
     const shopeeFirst=document.getElementById('plShopeeFirst').checked;
     const shopeeAd=document.getElementById('plShopeeAd').checked;
+    const capAuto=document.getElementById('plCapAuto').checked;
+    const comAuto=document.getElementById('plComAuto').checked;
+    const withLink=(it,i)=>{ const l=it.watchLink||(shopeeLines.length?shopeeLines[i % shopeeLines.length]:''); return l?Object.assign({},it,{watchLink:l}):it; };
     const captions=S.items.map((it,i)=>{
-      let cap=capLines;
-      let shopeeLink='';
-      if(it.watchLink) shopeeLink=it.watchLink;
-      else if(shopeeLines.length) shopeeLink=shopeeLines[i % shopeeLines.length];
+      let cap;
+      if(capAuto){
+        cap=caption(it);
+        if(shopeeAd) cap+='\n\n#ad';
+        return cap;
+      }
+      cap=capLines;
+      let shopeeLink=withLink(it,i).watchLink||'';
       if(shopeeLink){
-        const adTag=shopeeAd?'\n#ad':''; 
+        const adTag=shopeeAd?'\n#ad':'';
         if(shopeeFirst) cap=shopeeLink+'\n\n'+cap+adTag;
         else cap=cap+'\n\n🛒 BELI DI SHOPEE: '+shopeeLink+adTag;
-      }
+      } else if(shopeeAd) cap+='\n#ad';
       return cap;
     });
-    playerCode=buildPlayerShopee(titles,captions);
+    const comments=S.items.map((it,i)=> comAuto ? commentText(withLink(it,i)) : '');
+    const noLink=S.items.filter((it,i)=>!withLink(it,i).watchLink).length;
+    playerCode=buildPlayerShopee(titles,captions,comments,{capAuto,comAuto});
     const kb=(new Blob([playerCode]).size/1024).toFixed(1);
     const lines=playerCode.split('\n').length;
-    st.textContent=`✅ ${S.items.length} video (${nSlot} sudah ada di IndexedDB) · ${kb} KB · ${lines} baris · judul #1: "${titles[0]}"`;
+    st.textContent=`✅ ${S.items.length} video (${nSlot} sudah ada di IndexedDB) · ${kb} KB · ${lines} baris · judul #1: "${titles[0]}"`+(comAuto&&noLink?` · ⚠️ ${noLink} produk tanpa link (komentar tanpa link)`:'');
     const pv=document.getElementById('plPreview');
     pv.value=playerCode;
     document.getElementById('plPreviewWrap').style.display='block';
