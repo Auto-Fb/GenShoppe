@@ -174,7 +174,7 @@ footer{text-align:center;font-size:10px;color:#fff3;letter-spacing:.12em;text-tr
         <div style="display:flex;gap:8px;align-items:center;margin-top:8px"><span style="font:700 10px Inter;color:#fff8">VOL</span><input type="range" id="vol" min="0" max="100" value="60" style="flex:1"><button class="btn g" id="btnMus" style="flex:none;height:30px">🎼 Upload</button><input type="file" id="musFile" accept="audio/*" hidden></div>
         <div style="font:400 10px/1.4 Inter;color:#fff7;margin-top:8px">Musik ikut terekam ke video. Pilih “Tanpa musik” untuk video senyap, atau upload musik sendiri.</div></div>
       <div id="imgStat" class="note" style="margin:8px 0 0;color:#fff9"></div>
-      <div class="box" style="margin-top:8px"><small>Ukuran / kualitas video (Record &amp; Gen All)</small><select id="vq" style="margin-top:4px"><option value="s" selected>Kecil – cukup untuk reels (± 2-3 MB / 15s)</option><option value="m">Sedang (± 4-5 MB / 15s)</option><option value="h">Tinggi (± 6-7 MB / 15s)</option></select></div>
+      <div class="box" style="margin-top:8px"><small>Ukuran / kualitas video (Record &amp; Gen All)</small><select id="vq" style="margin-top:4px"><option value="s" selected>Kecil 720p – cukup untuk reels (± 2-3 MB)</option><option value="m">Sedang 1080p (± 4-6 MB)</option><option value="h">Tinggi 1080p (± 7-9 MB)</option></select></div>
       <div class="row"><button class="btn g" id="btnShuf">✨ Acak Gaya</button><button class="btn r" id="btnRec">🎬 RECORD VIDEO</button></div>
       <div class="row" style="margin-top:8px"><button class="btn g" id="genOne" style="flex:1">▶ Test video ini</button><button class="btn r" id="genAll" style="flex:1">🎬 Gen All + Auto Save</button></div>
       <div class="progress" style="margin-top:8px"><div class="progress-bar" id="progressBar"></div></div>
@@ -2658,10 +2658,16 @@ async function generateShopeeVideo(idx){
 async function shopeeWebCodecs(dur, audioBuf){
   if(typeof VideoEncoder==='undefined'||typeof VideoFrame==='undefined') throw new Error('WebCodecs tidak tersedia');
   if(!window.Mp4Muxer) throw new Error('mp4-muxer gagal dimuat');
-  const cv=document.getElementById('cv'), W=cv.width, H=cv.height, FPS=30;
-  const VBR=({s:1800000,m:3000000,h:5000000})[(document.getElementById('vq')||{}).value]||1800000;
+  const cv=document.getElementById('cv'), FPS=30;
+  // Encoder HP (terutama Android) sering mengabaikan bitrate rendah di 1080x1920 -> file tetap ~8 MB.
+  // Mode "Kecil" jadi 720x1280 (kanvas diskalakan per frame) supaya bitrate kecil benar-benar dipatuhi.
+  const QV=(document.getElementById('vq')||{}).value||'s', SMALL=(QV==='s');
+  const W=SMALL?720:cv.width, H=SMALL?1280:cv.height;
+  const VBR=({s:1500000,m:3000000,h:5000000})[QV]||1500000;
+  let oc=null, octx=null;
+  if(SMALL){ oc=document.createElement('canvas'); oc.width=W; oc.height=H; octx=oc.getContext('2d'); octx.imageSmoothingEnabled=true; octx.imageSmoothingQuality='high'; }
   let codec=null;
-  for(const c of ['avc1.640028','avc1.4d0028','avc1.64002A','avc1.42002A']){
+  for(const c of (SMALL?['avc1.4d0020','avc1.640020','avc1.4d001f','avc1.42001f']:['avc1.640028','avc1.4d0028','avc1.64002A','avc1.42002A'])){
     try{ const sp=await VideoEncoder.isConfigSupported({codec:c,width:W,height:H,bitrate:VBR,framerate:FPS,avc:{format:'avc'}}); if(sp&&sp.supported){codec=c;break;} }catch(e){}
   }
   if(!codec) throw new Error('Encoder H.264 tidak didukung');
@@ -2685,7 +2691,8 @@ async function shopeeWebCodecs(dur, audioBuf){
     for(let i=0;i<total;i++){
       if(encErr) throw encErr;
       draw(ctx, rc+i*1000/FPS, rc);   // waktu deterministik per frame (tidak tergantung kecepatan HP)
-      const fr=new VideoFrame(cv,{timestamp:Math.round(i*1e6/FPS),duration:Math.round(1e6/FPS)});
+      if(octx) octx.drawImage(cv,0,0,W,H);
+      const fr=new VideoFrame(oc||cv,{timestamp:Math.round(i*1e6/FPS),duration:Math.round(1e6/FPS)});
       venc.encode(fr,{keyFrame:i%(FPS*2)===0}); fr.close();
       while(venc.encodeQueueSize>6){ await wait(4); if(encErr) throw encErr; }
       if(i%3===0){ if(window.__onProg) window.__onProg((i+1)/total); await wait(0); }
