@@ -1129,7 +1129,7 @@ function record(){
   const done=()=>{S.rec=null;btn.disabled=false;btn.textContent="🎬 RECORD VIDEO"};
   try{
     const st=cv.captureStream(30);if(wantAudio&&A.dest)A.dest.stream.getAudioTracks().forEach(tr=>st.addTrack(tr));
-    const _r=mkRecorder(st,IS_MOBILE,IS_MOBILE?4e6:10e6),mr=_r.mr,mt=mr.mimeType||_r.mt,ch=[];
+    const _r=mkRecorder(st,IS_MOBILE,IS_MOBILE?3e6:8e6),mr=_r.mr,mt=mr.mimeType||_r.mt,ch=[];
     mr.onerror=e=>{console.error(e);toast("❌ Encoder gagal ("+((e&&e.error&&e.error.message)||"MediaRecorder")+"). Coba lagi atau pakai durasi lebih pendek.")};
     mr.ondataavailable=ev=>{if(ev.data.size>0)ch.push(ev.data)};
     mr.onstop=async()=>{
@@ -2493,7 +2493,7 @@ async function sClear(st){ if(!useMem){ try{ await idbRun(st,'readwrite', o=>o.c
 async function sDel(st,k){ if(!useMem){ try{ await idbRun(st,'readwrite', o=>o.delete(k)); return; }catch(e){ useMem=true; } } mem[st].delete(k); }
 
 function shopeeKey(it){ return ((it.watchLink||it.title||'')+'|'+(it.discountPrice||'')).toLowerCase().trim(); }
-function vidNameShopee(it,i,mime){ const base = (it.title||'produk').slice(0,30).replace(/[^\w\-]+/g,'_'); return `${String(i+1).padStart(2,'0')}_${base}.${(mime||'').includes('mp4')?'mp4':'webm'}`; }
+function vidNameShopee(it,i,mime){ return `video${String(i+1).padStart(2,'0')}.${(mime||'').includes('mp4')?'mp4':'webm'}`; }
 function downloadBlob(blob,name){ const u=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=u; a.download=name; a.click(); setTimeout(()=>URL.revokeObjectURL(u),5000); }
 const slotId = n => String(n).padStart(2,'0');
 function idbStat(msg){ const el=document.getElementById('kvStat'); if(el) el.textContent=msg; }
@@ -2528,7 +2528,7 @@ function renderDoneList(){
     `<div class="status" style="margin-bottom:6px">💾 ${items.length}/${S.items.length} video · ${mb.toFixed(1)} MB - Klik Gen All untuk auto download ke IndexedDB</div>`+
     items.slice().reverse().map(({it,i,m})=>`
     <div class="done-item" data-k="${encodeURIComponent(shopeeKey(it))}" data-i="${i}">
-      <span class="nm">✓ ${vidNameShopee(it,i,m.mime)} · ${(m.size/1048576).toFixed(1)} MB</span>
+      <span class="nm">✓ ${vidNameShopee(it,i,m.mime)} · ${(m.size/1048576).toFixed(1)} MB<br><small style="opacity:.6;font-weight:400">${esc(String(it.title||'').slice(0,60))}</small></span>
       <button class="btn g" data-a="mp4">⬇ MP4</button>
       ${canShare?'<button class="btn g" data-a="share">📤</button>':''}
       <button class="btn g" data-a="play">▶</button>
@@ -2611,7 +2611,7 @@ async function generateShopeeVideo(idx){
   catch(e){ console.warn('[rec] WebCodecs gagal, fallback MediaRecorder:', e&&e.message); }
   // Chrome Android sering gagal "Video encoding failed" kalau VP9 + bitrate tinggi di 1080x1920.
   // Urutan percobaan: VP8 4 Mbps -> default browser 2.5 Mbps -> default browser tanpa set bitrate.
-  const attempts=[{vp8:true,br:4000000},{vp8:true,br:2500000},{vp8:false,br:0}];
+  const attempts=[{vp8:true,br:3000000},{vp8:true,br:2000000},{vp8:false,br:0}];
   let lastErr=null;
   for(let ai=0;ai<attempts.length;ai++){
     try{ return await recordOnce(cv,dur,attempts[ai]); }
@@ -2625,7 +2625,7 @@ async function shopeeWebCodecs(dur){
   const cv=document.getElementById('cv'), W=cv.width, H=cv.height, FPS=30;
   let codec=null;
   for(const c of ['avc1.640028','avc1.4d0028','avc1.64002A','avc1.42002A']){
-    try{ const sp=await VideoEncoder.isConfigSupported({codec:c,width:W,height:H,bitrate:4000000,framerate:FPS,avc:{format:'avc'}}); if(sp&&sp.supported){codec=c;break;} }catch(e){}
+    try{ const sp=await VideoEncoder.isConfigSupported({codec:c,width:W,height:H,bitrate:2500000,framerate:FPS,avc:{format:'avc'}}); if(sp&&sp.supported){codec=c;break;} }catch(e){}
   }
   if(!codec) throw new Error('Encoder H.264 tidak didukung');
   let wl=null; try{ if('wakeLock' in navigator) wl=await navigator.wakeLock.request('screen'); }catch(e){}
@@ -2635,7 +2635,7 @@ async function shopeeWebCodecs(dur){
     const muxer=new Mp4Muxer.Muxer({target,video:{codec:'avc',width:W,height:H},fastStart:'in-memory'});
     let encErr=null;
     venc=new VideoEncoder({output:(c,m)=>muxer.addVideoChunk(c,m),error:e=>{encErr=e;}});
-    venc.configure({codec,width:W,height:H,bitrate:4000000,framerate:FPS,avc:{format:'avc'}});
+    venc.configure({codec,width:W,height:H,bitrate:2500000,framerate:FPS,avc:{format:'avc'}});
     const ctx=cv.getContext('2d'), rc=1000, total=Math.round(dur*FPS);
     for(let i=0;i<total;i++){
       if(encErr) throw encErr;
