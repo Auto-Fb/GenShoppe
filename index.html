@@ -174,6 +174,7 @@ footer{text-align:center;font-size:10px;color:#fff3;letter-spacing:.12em;text-tr
         <div style="display:flex;gap:8px;align-items:center;margin-top:8px"><span style="font:700 10px Inter;color:#fff8">VOL</span><input type="range" id="vol" min="0" max="100" value="60" style="flex:1"><button class="btn g" id="btnMus" style="flex:none;height:30px">🎼 Upload</button><input type="file" id="musFile" accept="audio/*" hidden></div>
         <div style="font:400 10px/1.4 Inter;color:#fff7;margin-top:8px">Musik ikut terekam ke video. Pilih “Tanpa musik” untuk video senyap, atau upload musik sendiri.</div></div>
       <div id="imgStat" class="note" style="margin:8px 0 0;color:#fff9"></div>
+      <div class="box" style="margin-top:8px"><small>Ukuran / kualitas video (Record &amp; Gen All)</small><select id="vq" style="margin-top:4px"><option value="s" selected>Kecil – cukup untuk reels (± 2-3 MB / 15s)</option><option value="m">Sedang (± 4-5 MB / 15s)</option><option value="h">Tinggi (± 6-7 MB / 15s)</option></select></div>
       <div class="row"><button class="btn g" id="btnShuf">✨ Acak Gaya</button><button class="btn r" id="btnRec">🎬 RECORD VIDEO</button></div>
       <div class="row" style="margin-top:8px"><button class="btn g" id="genOne" style="flex:1">▶ Test video ini</button><button class="btn r" id="genAll" style="flex:1">🎬 Gen All + Auto Save</button></div>
       <div class="progress" style="margin-top:8px"><div class="progress-bar" id="progressBar"></div></div>
@@ -1119,7 +1120,41 @@ function mkRecorder(st,vp8First,br){
   for(const o of tries){ if(!o.mimeType)delete o.mimeType; try{ return {mr:new MediaRecorder(st,o),mt}; }catch(e){ lastErr=e } }
   throw lastErr||new Error("MediaRecorder tidak didukung");
 }
-function record(){
+async function shopeeAudioFor(dur){
+  if(A.style==="off") return null;
+  let buf=null;
+  if(A.style==="custom") buf=A.buf;
+  else{ const MK=musKey(); if(!TRACKS[MK]) return null; buf=await loadTrack(MK); }
+  if(!buf) return null;
+  const SR=44100, oc=new OfflineAudioContext(2,Math.ceil(SR*dur),SR);
+  const bus=oc.createGain(), comp=oc.createDynamicsCompressor(), master=oc.createGain();
+  bus.connect(comp); comp.connect(master); master.connect(oc.destination);
+  master.gain.setValueAtTime(0,0); master.gain.linearRampToValueAtTime(A.vol,.4);
+  master.gain.setValueAtTime(A.vol,Math.max(.4,dur-.6)); master.gain.linearRampToValueAtTime(0,dur);
+  const src=oc.createBufferSource(); src.buffer=buf; src.loop=true; src.connect(bus); src.start(0);
+  return await oc.startRendering();
+}
+async function record(){
+  const btn=$("btnRec");
+  if(!cur()){toast("Pilih produk dulu");return}
+  if(S.rec!=null||btn.disabled) return;
+  btn.disabled=true; btn.textContent="⏳ RENDER 0%";
+  try{ musicStop(); $("btnPlay").textContent="▶ Preview"; }catch(e){}
+  window.__onProg=p=>{ btn.textContent="⏳ RENDER "+Math.round(p*100)+"%"; };
+  const reset=()=>{ window.__onProg=null; btn.disabled=false; btn.textContent="🎬 RECORD VIDEO"; };
+  try{
+    toast("⏳ Menyiapkan musik & encoder…");
+    let ab=null; try{ ab=await shopeeAudioFor(S.dur); }catch(e){ console.warn(e); musErr(e); }
+    const r=await shopeeWebCodecs(S.dur,ab);
+    dl(r.blob,"SHOPEE_VIDEO_"+Date.now()+".mp4");
+    toast("Video "+S.dur+"s MP4 terunduh"+(ab&&!r.audio?" (tanpa musik: AAC tidak didukung browser)":"")+"!");
+    reset();
+  }catch(err){
+    console.warn("[record] WebCodecs gagal:",err);
+    reset(); toast("WebCodecs gagal, pakai cara rekam lama…"); recordMR();
+  }
+}
+function recordMR(){
   const cv=$("cv"),btn=$("btnRec");
   if(!cur()){toast("Pilih produk dulu");return}
   {const MK=musKey(),T=TRACKS[MK];if(T&&!T.buf){toast("⏳ Memuat musik…");loadTrack(MK).then(()=>record()).catch(musErr);return}}
@@ -2607,7 +2642,8 @@ async function generateShopeeVideo(idx){
   // Matikan musik saat genAll biar cepat, atau pakai musik jika mau
   const wantAudio=false; // genAll tanpa musik biar stabil
   // Jalur utama (sama seperti versi Amazon): WebCodecs H.264 + mp4-muxer -> MP4 langsung, lebih cepat dari realtime.
-  try{ return await shopeeWebCodecs(dur); }
+  let _ab=null; try{ _ab=await shopeeAudioFor(dur); }catch(e){ console.warn('[rec] musik dilewati:', e&&e.message); }
+  try{ return await shopeeWebCodecs(dur,_ab); }
   catch(e){ console.warn('[rec] WebCodecs gagal, fallback MediaRecorder:', e&&e.message); }
   // Chrome Android sering gagal "Video encoding failed" kalau VP9 + bitrate tinggi di 1080x1920.
   // Urutan percobaan: VP8 4 Mbps -> default browser 2.5 Mbps -> default browser tanpa set bitrate.
@@ -2619,23 +2655,32 @@ async function generateShopeeVideo(idx){
   }
   throw lastErr||new Error('Video encoding failed');
 }
-async function shopeeWebCodecs(dur){
+async function shopeeWebCodecs(dur, audioBuf){
   if(typeof VideoEncoder==='undefined'||typeof VideoFrame==='undefined') throw new Error('WebCodecs tidak tersedia');
   if(!window.Mp4Muxer) throw new Error('mp4-muxer gagal dimuat');
   const cv=document.getElementById('cv'), W=cv.width, H=cv.height, FPS=30;
+  const VBR=({s:1800000,m:3000000,h:5000000})[(document.getElementById('vq')||{}).value]||1800000;
   let codec=null;
   for(const c of ['avc1.640028','avc1.4d0028','avc1.64002A','avc1.42002A']){
-    try{ const sp=await VideoEncoder.isConfigSupported({codec:c,width:W,height:H,bitrate:2500000,framerate:FPS,avc:{format:'avc'}}); if(sp&&sp.supported){codec=c;break;} }catch(e){}
+    try{ const sp=await VideoEncoder.isConfigSupported({codec:c,width:W,height:H,bitrate:VBR,framerate:FPS,avc:{format:'avc'}}); if(sp&&sp.supported){codec=c;break;} }catch(e){}
   }
   if(!codec) throw new Error('Encoder H.264 tidak didukung');
+  // VBR + mode kualitas: bit dihemat di adegan diam (foto produk), dipakai lebih banyak saat ada gerakan (hook/teks)
+  let extra={bitrateMode:'variable',latencyMode:'quality'};
+  try{ const sp2=await VideoEncoder.isConfigSupported(Object.assign({codec,width:W,height:H,bitrate:VBR,framerate:FPS,avc:{format:'avc'}},extra)); if(!(sp2&&sp2.supported)) extra={}; }catch(e){ extra={}; }
   let wl=null; try{ if('wakeLock' in navigator) wl=await navigator.wakeLock.request('screen'); }catch(e){}
-  let venc=null;
+  let audioCfg=null;
+  if(audioBuf && typeof AudioEncoder!=='undefined' && typeof AudioData!=='undefined'){
+    try{ const cfg={codec:'mp4a.40.2',sampleRate:44100,numberOfChannels:2,bitrate:96000}; const sp=await AudioEncoder.isConfigSupported(cfg); if(sp&&sp.supported) audioCfg=cfg; }catch(e){}
+  }
+  S.rec=performance.now();   // jeda preview loop selama render
+  let venc=null, aenc=null;
   try{
     const target=new Mp4Muxer.ArrayBufferTarget();
-    const muxer=new Mp4Muxer.Muxer({target,video:{codec:'avc',width:W,height:H},fastStart:'in-memory'});
+    const muxer=new Mp4Muxer.Muxer(Object.assign({target,video:{codec:'avc',width:W,height:H},fastStart:'in-memory'}, audioCfg?{audio:{codec:'aac',numberOfChannels:2,sampleRate:44100}}:{}));
     let encErr=null;
     venc=new VideoEncoder({output:(c,m)=>muxer.addVideoChunk(c,m),error:e=>{encErr=e;}});
-    venc.configure({codec,width:W,height:H,bitrate:2500000,framerate:FPS,avc:{format:'avc'}});
+    venc.configure(Object.assign({codec,width:W,height:H,bitrate:VBR,framerate:FPS,avc:{format:'avc'}},extra));
     const ctx=cv.getContext('2d'), rc=1000, total=Math.round(dur*FPS);
     for(let i=0;i<total;i++){
       if(encErr) throw encErr;
@@ -2646,13 +2691,28 @@ async function shopeeWebCodecs(dur){
       if(i%3===0){ if(window.__onProg) window.__onProg((i+1)/total); await wait(0); }
     }
     await venc.flush(); if(encErr) throw encErr;
+    if(audioCfg){
+      aenc=new AudioEncoder({output:(c,m)=>muxer.addAudioChunk(c,m),error:e=>{encErr=e;}});
+      aenc.configure(audioCfg);
+      const L=audioBuf.getChannelData(0), R=audioBuf.numberOfChannels>1?audioBuf.getChannelData(1):L, CH=4096;
+      for(let off=0; off<L.length; off+=CH){
+        const n=Math.min(CH,L.length-off), d=new Float32Array(n*2);
+        d.set(L.subarray(off,off+n),0); d.set(R.subarray(off,off+n),n);
+        const ad=new AudioData({format:'f32-planar',sampleRate:44100,numberOfFrames:n,numberOfChannels:2,timestamp:Math.round(off/44100*1e6),data:d});
+        aenc.encode(ad); ad.close();
+        while(aenc.encodeQueueSize>8) await wait(2);
+      }
+      await aenc.flush(); if(encErr) throw encErr;
+    }
     muxer.finalize();
     const blob=new Blob([target.buffer],{type:'video/mp4'});
     if(blob.size<50*1024) throw new Error('Hasil encode terlalu kecil');
     if(window.__onProg) window.__onProg(1);
-    return {blob,mimeType:'video/mp4'};
+    return {blob,mimeType:'video/mp4',audio:!!audioCfg};
   }finally{
+    S.rec=null;
     try{ if(venc&&venc.state!=='closed') venc.close(); }catch(e){}
+    try{ if(aenc&&aenc.state!=='closed') aenc.close(); }catch(e){}
     try{ wl&&wl.release(); }catch(e){}
   }
 }
