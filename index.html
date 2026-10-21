@@ -2644,7 +2644,7 @@ async function generateShopeeVideo(idx){
   // Jalur utama (sama seperti versi Amazon): WebCodecs H.264 + mp4-muxer -> MP4 langsung, lebih cepat dari realtime.
   let _ab=null; try{ _ab=await shopeeAudioFor(dur); }catch(e){ console.warn('[rec] musik dilewati:', e&&e.message); }
   try{ return await shopeeWebCodecs(dur,_ab); }
-  catch(e){ console.warn('[rec] WebCodecs gagal, fallback MediaRecorder:', e&&e.message); }
+  catch(e){ console.warn('[rec] WebCodecs gagal, fallback MediaRecorder:', e&&e.message); try{ if(typeof toast==='function') toast('⚠️ WebCodecs gagal ('+(e&&e.message||'?')+'), rekam realtime…'); }catch(_){} }
   // Chrome Android sering gagal "Video encoding failed" kalau VP9 + bitrate tinggi di 1080x1920.
   // Urutan percobaan: VP8 4 Mbps -> default browser 2.5 Mbps -> default browser tanpa set bitrate.
   const attempts=[{vp8:true,br:3000000},{vp8:true,br:2000000},{vp8:false,br:0}];
@@ -2656,18 +2656,28 @@ async function generateShopeeVideo(idx){
   throw lastErr||new Error('Video encoding failed');
 }
 async function shopeeWebCodecs(dur, audioBuf){
+  try{ return await shopeeWebCodecsCore(dur,audioBuf,false); }
+  catch(e){
+    const q=(document.getElementById('vq')||{}).value||'s';
+    if(q!=='s') throw e;
+    console.warn('[rec] mode 720p gagal/macet, coba 1080p seperti versi Amazon:', e&&e.message);
+    try{ if(typeof toast==='function') toast('⚠️ Mode 720p gagal, coba 1080p…'); }catch(_){}
+    return await shopeeWebCodecsCore(dur,audioBuf,true);
+  }
+}
+async function shopeeWebCodecsCore(dur, audioBuf, forceFull){
   if(typeof VideoEncoder==='undefined'||typeof VideoFrame==='undefined') throw new Error('WebCodecs tidak tersedia');
   if(!window.Mp4Muxer) throw new Error('mp4-muxer gagal dimuat');
   const cv=document.getElementById('cv'), FPS=30;
   // Encoder HP (terutama Android) sering mengabaikan bitrate rendah di 1080x1920 -> file tetap ~8 MB.
   // Mode "Kecil" jadi 720x1280 (kanvas diskalakan per frame) supaya bitrate kecil benar-benar dipatuhi.
-  const QV=(document.getElementById('vq')||{}).value||'s', SMALL=(QV==='s');
+  const QV=(document.getElementById('vq')||{}).value||'s', SMALL=(QV==='s' && !forceFull);
   const W=SMALL?720:cv.width, H=SMALL?1280:cv.height;
-  const VBR=({s:1500000,m:3000000,h:5000000})[QV]||1500000;
+  const VBR=SMALL?1500000:(QV==='h'?5000000:3000000);
   let oc=null, octx=null;
   if(SMALL){ oc=document.createElement('canvas'); oc.width=W; oc.height=H; octx=oc.getContext('2d'); octx.imageSmoothingEnabled=true; octx.imageSmoothingQuality='high'; }
   let codec=null;
-  for(const c of (SMALL?['avc1.4d0020','avc1.640020','avc1.4d001f','avc1.42001f']:['avc1.640028','avc1.4d0028','avc1.64002A','avc1.42002A'])){
+  for(const c of ['avc1.640028','avc1.4d0028','avc1.64002A','avc1.42002A']){
     try{ const sp=await VideoEncoder.isConfigSupported({codec:c,width:W,height:H,bitrate:VBR,framerate:FPS,avc:{format:'avc'}}); if(sp&&sp.supported){codec=c;break;} }catch(e){}
   }
   if(!codec) throw new Error('Encoder H.264 tidak didukung');
@@ -2694,10 +2704,10 @@ async function shopeeWebCodecs(dur, audioBuf){
       if(octx) octx.drawImage(cv,0,0,W,H);
       const fr=new VideoFrame(oc||cv,{timestamp:Math.round(i*1e6/FPS),duration:Math.round(1e6/FPS)});
       venc.encode(fr,{keyFrame:i%(FPS*2)===0}); fr.close();
-      while(venc.encodeQueueSize>6){ await wait(4); if(encErr) throw encErr; }
+      { const tq=Date.now(); while(venc.encodeQueueSize>6){ await wait(4); if(encErr) throw encErr; if(Date.now()-tq>8000) throw new Error('Encoder macet (antrian tidak turun)'); } }
       if(i%3===0){ if(window.__onProg) window.__onProg((i+1)/total); await wait(0); }
     }
-    await venc.flush(); if(encErr) throw encErr;
+    await Promise.race([venc.flush(), new Promise((_,rj)=>setTimeout(()=>rj(new Error('Encoder macet saat flush')),30000))]); if(encErr) throw encErr;
     if(audioCfg){
       aenc=new AudioEncoder({output:(c,m)=>muxer.addAudioChunk(c,m),error:e=>{encErr=e;}});
       aenc.configure(audioCfg);
@@ -2707,9 +2717,9 @@ async function shopeeWebCodecs(dur, audioBuf){
         d.set(L.subarray(off,off+n),0); d.set(R.subarray(off,off+n),n);
         const ad=new AudioData({format:'f32-planar',sampleRate:44100,numberOfFrames:n,numberOfChannels:2,timestamp:Math.round(off/44100*1e6),data:d});
         aenc.encode(ad); ad.close();
-        while(aenc.encodeQueueSize>8) await wait(2);
+        { const ta=Date.now(); while(aenc.encodeQueueSize>8){ await wait(2); if(encErr) throw encErr; if(Date.now()-ta>8000) throw new Error('Encoder audio macet'); } }
       }
-      await aenc.flush(); if(encErr) throw encErr;
+      await Promise.race([aenc.flush(), new Promise((_,rj)=>setTimeout(()=>rj(new Error('Audio flush macet')),20000))]); if(encErr) throw encErr;
     }
     muxer.finalize();
     const blob=new Blob([target.buffer],{type:'video/mp4'});
