@@ -7,6 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Anton&family=Bebas+Neue&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mp4-muxer@4.3.0/build/mp4-muxer.js"></script>
 <style>
 *{box-sizing:border-box;margin:0}
 body{background:#0a0a0a;color:#fff;font:14px/1.5 Inter,system-ui,sans-serif;min-height:100vh;overflow-x:hidden}
@@ -1105,6 +1106,19 @@ async function convertToMp4(blob,onProgress){
   const d=await ff.readFile("out.mp4");try{await ff.deleteFile("in.webm")}catch{}try{await ff.deleteFile("out.mp4")}catch{}
   return new Blob([d.buffer],{type:"video/mp4"})
 }
+const IS_MOBILE=/Android|iPhone|iPad|Mobile/i.test(navigator.userAgent);
+function pickMime(vp8First){
+  const L=vp8First?["video/webm;codecs=vp8,opus","video/webm;codecs=vp8","video/webm;codecs=vp9,opus","video/webm;codecs=vp9","video/webm"]
+                  :["video/webm;codecs=vp9,opus","video/webm;codecs=vp8,opus","video/webm;codecs=vp9","video/webm;codecs=vp8","video/webm"];
+  return L.find(q=>{try{return MediaRecorder.isTypeSupported(q)}catch(e){return false}})||"";
+}
+function mkRecorder(st,vp8First,br){
+  const mt=pickMime(vp8First);
+  const tries=[{mimeType:mt,videoBitsPerSecond:br},{mimeType:mt},{}];
+  let lastErr;
+  for(const o of tries){ if(!o.mimeType)delete o.mimeType; try{ return {mr:new MediaRecorder(st,o),mt}; }catch(e){ lastErr=e } }
+  throw lastErr||new Error("MediaRecorder tidak didukung");
+}
 function record(){
   const cv=$("cv"),btn=$("btnRec");
   if(!cur()){toast("Pilih produk dulu");return}
@@ -1115,8 +1129,8 @@ function record(){
   const done=()=>{S.rec=null;btn.disabled=false;btn.textContent="🎬 RECORD VIDEO"};
   try{
     const st=cv.captureStream(30);if(wantAudio&&A.dest)A.dest.stream.getAudioTracks().forEach(tr=>st.addTrack(tr));
-    const mt=["video/webm;codecs=vp9,opus","video/webm;codecs=vp8,opus","video/webm;codecs=vp9","video/webm;codecs=vp8","video/webm"].find(q=>MediaRecorder.isTypeSupported(q))||"";
-    const mr=new MediaRecorder(st,{mimeType:mt,videoBitsPerSecond:10e6}),ch=[];
+    const _r=mkRecorder(st,IS_MOBILE,IS_MOBILE?4e6:10e6),mr=_r.mr,mt=mr.mimeType||_r.mt,ch=[];
+    mr.onerror=e=>{console.error(e);toast("❌ Encoder gagal ("+((e&&e.error&&e.error.message)||"MediaRecorder")+"). Coba lagi atau pakai durasi lebih pendek.")};
     mr.ondataavailable=ev=>{if(ev.data.size>0)ch.push(ev.data)};
     mr.onstop=async()=>{
       S.rec=null;const wb=new Blob(ch,{type:mt||"video/webm"});
@@ -2592,42 +2606,93 @@ async function generateShopeeVideo(idx){
   const dur=S.dur||15;
   // Matikan musik saat genAll biar cepat, atau pakai musik jika mau
   const wantAudio=false; // genAll tanpa musik biar stabil
+  // Jalur utama (sama seperti versi Amazon): WebCodecs H.264 + mp4-muxer -> MP4 langsung, lebih cepat dari realtime.
+  try{ return await shopeeWebCodecs(dur); }
+  catch(e){ console.warn('[rec] WebCodecs gagal, fallback MediaRecorder:', e&&e.message); }
+  // Chrome Android sering gagal "Video encoding failed" kalau VP9 + bitrate tinggi di 1080x1920.
+  // Urutan percobaan: VP8 4 Mbps -> default browser 2.5 Mbps -> default browser tanpa set bitrate.
+  const attempts=[{vp8:true,br:4000000},{vp8:true,br:2500000},{vp8:false,br:0}];
+  let lastErr=null;
+  for(let ai=0;ai<attempts.length;ai++){
+    try{ return await recordOnce(cv,dur,attempts[ai]); }
+    catch(e){ lastErr=e; console.warn('[rec] percobaan',ai+1,'gagal:',e&&e.message); await wait(700); }
+  }
+  throw lastErr||new Error('Video encoding failed');
+}
+async function shopeeWebCodecs(dur){
+  if(typeof VideoEncoder==='undefined'||typeof VideoFrame==='undefined') throw new Error('WebCodecs tidak tersedia');
+  if(!window.Mp4Muxer) throw new Error('mp4-muxer gagal dimuat');
+  const cv=document.getElementById('cv'), W=cv.width, H=cv.height, FPS=30;
+  let codec=null;
+  for(const c of ['avc1.640028','avc1.4d0028','avc1.64002A','avc1.42002A']){
+    try{ const sp=await VideoEncoder.isConfigSupported({codec:c,width:W,height:H,bitrate:4000000,framerate:FPS,avc:{format:'avc'}}); if(sp&&sp.supported){codec=c;break;} }catch(e){}
+  }
+  if(!codec) throw new Error('Encoder H.264 tidak didukung');
+  let wl=null; try{ if('wakeLock' in navigator) wl=await navigator.wakeLock.request('screen'); }catch(e){}
+  let venc=null;
+  try{
+    const target=new Mp4Muxer.ArrayBufferTarget();
+    const muxer=new Mp4Muxer.Muxer({target,video:{codec:'avc',width:W,height:H},fastStart:'in-memory'});
+    let encErr=null;
+    venc=new VideoEncoder({output:(c,m)=>muxer.addVideoChunk(c,m),error:e=>{encErr=e;}});
+    venc.configure({codec,width:W,height:H,bitrate:4000000,framerate:FPS,avc:{format:'avc'}});
+    const ctx=cv.getContext('2d'), rc=1000, total=Math.round(dur*FPS);
+    for(let i=0;i<total;i++){
+      if(encErr) throw encErr;
+      draw(ctx, rc+i*1000/FPS, rc);   // waktu deterministik per frame (tidak tergantung kecepatan HP)
+      const fr=new VideoFrame(cv,{timestamp:Math.round(i*1e6/FPS),duration:Math.round(1e6/FPS)});
+      venc.encode(fr,{keyFrame:i%(FPS*2)===0}); fr.close();
+      while(venc.encodeQueueSize>6){ await wait(4); if(encErr) throw encErr; }
+      if(i%3===0){ if(window.__onProg) window.__onProg((i+1)/total); await wait(0); }
+    }
+    await venc.flush(); if(encErr) throw encErr;
+    muxer.finalize();
+    const blob=new Blob([target.buffer],{type:'video/mp4'});
+    if(blob.size<50*1024) throw new Error('Hasil encode terlalu kecil');
+    if(window.__onProg) window.__onProg(1);
+    return {blob,mimeType:'video/mp4'};
+  }finally{
+    try{ if(venc&&venc.state!=='closed') venc.close(); }catch(e){}
+    try{ wl&&wl.release(); }catch(e){}
+  }
+}
+function recordOnce(cv,dur,cfg){
   return new Promise((resolve, reject)=>{
+    let dead=false, failed=false;
     try{
       const stream=cv.captureStream(30);
-      const mt=["video/webm;codecs=vp9,opus","video/webm;codecs=vp8,opus","video/webm;codecs=vp9","video/webm;codecs=vp8","video/webm"].find(q=>MediaRecorder.isTypeSupported(q))||"";
-      const mr=new MediaRecorder(stream,{mimeType:mt, videoBitsPerSecond:6000000});
+      const _r=mkRecorder(stream,cfg.vp8,cfg.br), mr=_r.mr, mt=mr.mimeType||_r.mt||'video/webm';
       const ch=[];
-      mr.ondataavailable=ev=>{ if(ev.data.size>0) ch.push(ev.data); };
+      const stopTracks=()=>{ try{ stream.getTracks().forEach(t=>t.stop()); }catch(e){} };
+      mr.ondataavailable=ev=>{ if(ev.data&&ev.data.size>0) ch.push(ev.data); };
       mr.onstop=async()=>{
-        const blob=new Blob(ch,{type:mt||"video/webm"});
-        // Convert ke mp4 jika ada converter, else pakai webm langsung sebagai mp4 fallback
+        dead=true; stopTracks();
+        if(failed) return;
+        if(!ch.length){ reject(new Error('Video encoding failed.')); return; }
+        const blob=new Blob(ch,{type:mt});
         try{
           if(typeof convertToMp4==='function'){
             const mp4=await convertToMp4(blob, ()=>{});
             resolve({blob:mp4, mimeType:'video/mp4'});
           }else{
-            resolve({blob, mimeType:mt||'video/webm'});
+            resolve({blob, mimeType:mt});
           }
         }catch(e){
-          resolve({blob, mimeType:mt||'video/webm'});
+          resolve({blob, mimeType:mt});
         }
       };
-      mr.onerror=e=>{ reject(e.error||new Error('MediaRecorder error')); };
+      mr.onerror=e=>{ failed=true; dead=true; try{ if(mr.state!=='inactive') mr.stop(); }catch(_){} stopTracks(); reject((e&&e.error)||new Error('Video encoding failed.')); };
       mr.start(100);
-      // rc = titik nol render, variabel LOKAL (seperti t0 di generateVideoRecorder milik Amazon) — tidak pernah ditulis ke S.rec/state global,
-      // jadi aman dipanggil berkali-kali berurutan di loop Gen All tanpa risiko lupa reset.
       const rc=performance.now();
       function tick(){
+        if(dead) return;
         const now=performance.now();
         const elapsed=(now-rc)/1000;
         if(elapsed>=dur){
-          // draw last frame
           try{ draw(document.getElementById('cv').getContext('2d'), now, rc); }catch(e){}
           setTimeout(()=>{ if(mr.state==='recording') mr.stop(); },200);
           return;
         }
-        // draw frame
         try{ draw(document.getElementById('cv').getContext('2d'), now, rc); }catch(e){}
         if(window.__onProg) window.__onProg(Math.min(elapsed/dur,1));
         requestAnimationFrame(tick);
